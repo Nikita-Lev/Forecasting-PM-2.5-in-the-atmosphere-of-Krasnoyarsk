@@ -32,6 +32,8 @@ def PlotSerie(y, l):
     
     plt.plot(y)
     plt.title(l)
+    plt.xlabel('time')
+    plt.ylabel('PM 2.5')
     plt.grid()
     plt.show()
 
@@ -57,18 +59,18 @@ def CompareGraphDifPlot(y1, y2, l1, l2):
 
 
 # Построение автокорреляционной и частичной автокорреляционной функций
-def plotCF(data):
+def plotCF(data, lags):
     # График автокорреляции
     fig, ax = plt.subplots(figsize = (11, 4)) 
 
-    sm.graphics.tsa.plot_acf(data.values, ax=ax)
+    sm.graphics.tsa.plot_acf(data.values, ax=ax, lags = lags)
     plt.grid()
     plt.show()
     
     # График частичной автокорреляции
     fig, ax = plt.subplots(figsize = (11, 4))
 
-    sm.graphics.tsa.plot_pacf(data.values, ax=ax, method='ywm')
+    sm.graphics.tsa.plot_pacf(data.values, ax=ax, method='ywm', lags = lags)
     plt.grid()
     plt.show()
 
@@ -98,7 +100,7 @@ def get_param(p, d, q):
 
 # Подбор оптимальных гиперпараметров поиском по сетке
 import warnings
-def optimize_SARIMA(data, p, d, q, P=0, D=0, Q=0, s=0):
+def optimize_SARIMA(data, p, d, q, P=0, D=0, Q=0, s=0, exog = None):
     """
         Return dataframe with parameters and corresponding AIC
         
@@ -123,10 +125,10 @@ def optimize_SARIMA(data, p, d, q, P=0, D=0, Q=0, s=0):
             # SARIMA
             if s:
                 model = sm.tsa.statespace.SARIMAX(data, order=(param[0], param[1], param[2]),
-                                              seasonal_order=(param[3], param[4], param[5], s)).fit(disp=-1)
+                                              seasonal_order=(param[3], param[4], param[5], s), exog = exog).fit(disp=-1)
             # ARIMA
             else:
-                model = sm.tsa.statespace.SARIMAX(data, order=(param[0], param[1], param[2])).fit(disp=-1)
+                model = sm.tsa.statespace.SARIMAX(data, order=(param[0], param[1], param[2]), exog = exog).fit(disp=-1)
         
         except ValueError:
             continue
@@ -146,12 +148,12 @@ def optimize_SARIMA(data, p, d, q, P=0, D=0, Q=0, s=0):
 
 
 # Построение модели и диагностика
-def getModel(data, param, s):
+def getModel(data, param, s, exog):
     if s:
         model = sm.tsa.statespace.SARIMAX(data, order = (param[0], param[1], param[2]),
-                                      seasonal_order=(param[3], param[4], param[5], s)).fit(disp=-1)
+                                      seasonal_order=(param[3], param[4], param[5], s), exog = exog).fit(disp=-1)
     else:
-        model = sm.tsa.statespace.SARIMAX(data, order = (param[0], param[1], param[2])).fit(disp=-1)
+        model = sm.tsa.statespace.SARIMAX(data, order = (param[0], param[1], param[2]), exog = exog).fit(disp=-1)
     
     display(model.summary().tables[1]) # Таблица коэффициентов
     
@@ -210,8 +212,8 @@ def Metrics(y, y_pred):
 
 
 # Построение прогнозов до определённой даты
-def GetPred(model, start, end, lmbda = False):
-    pred = model.predict(start = pd.to_datetime(start), end = pd.to_datetime(end), dynamic=False)
+def GetPred(model, start, end, exog = None, lmbda = False):
+    pred = model.predict(start = pd.to_datetime(start), end = pd.to_datetime(end), dynamic=False, exog = exog)
     if lmbda != False:
         pred = invboxcox(pred, lmbda)
     return pred
@@ -221,52 +223,106 @@ def GetPred(model, start, end, lmbda = False):
 # Класс прогнозирования
 class Forecaster:
     
-    def __init__(self, sensor, district, begin, start, end):
+    def __init__(self, sensor, district, begin, start, end, exog_features = None, lags = None):
         self.district = district
         # Срез данных от begin до end
         self.begin = begin
-        self.start = start
-        # Начало прогнозирования
+        self.start = start # Начало прогнозирования
         self.end = end
         
         # Датчики (КНЦ или министерские)
         self.sensor = sensor
         
-        # Данные
-        self.df = pd.read_csv(f'pm25_{self.sensor}.csv', sep = ';', index_col = ['Date'], parse_dates = ['Date'])[district]
+        
+        
+        # Данные pm 2.5
+        self.df = pd.read_csv(f'pm25_{self.sensor}.csv', sep = ';', index_col = ['Date'], parse_dates = ['Date'])
+        
+        
+        # Усреднение по некоторым датчикам, имеющие схожие показания
+        if district == 'Mean' and sensor == 's':
+            self.df['Mean'] = self.df[['Николаевка', 'Овинный-Таймыр', 'Песчанка', 'Телевизорная, 1/31', 'Ветлужанка']].mean(axis=1)
+           
+        self.df = self.df[district]
+        
         
         # Тренировочная и тестовая выборки
         self.train = self.df[begin : start]
         self.test = self.df[start : end]
         
+        # Экзогенные переменные
+        self.exog_features = exog_features
+        
+        self.exogTrain = None
+        self.exogTest = None
+        if exog_features:
+            self.exogTrain = []
+            self.exogTest = []
+            # Цикл по экзогенным переменным
+            for feature in exog_features:
+                
+                feat_df = pd.read_csv(f'Features/{feature}_{self.sensor}.csv', sep = ';', index_col = ['Date'], parse_dates = ['Date'])
+                
+                # Усреднение по некоторым датчикам, имеющие схожие показания
+                if district == 'Mean' and sensor == 's':
+                    feat_df['Mean'] = feat_df[['Николаевка', 'Овинный-Таймыр', 'Песчанка', 'Телевизорная, 1/31', 'Ветлужанка']].mean(axis=1)
+
+                feat_df = feat_df[district]
+                
+                # Проверка на пропуски
+                nans = pd.isnull(feat_df[begin : end].values).sum()
+                if nans > 0:
+                    print('Пропуски в признаке', feature, ':', nans)
+                self.exogTrain.append(feat_df[begin : start].values)
+                self.exogTest.append(feat_df[start : end].values[1:])
+            self.exogTrain = np.array(self.exogTrain).T
+            self.exogTest = np.array(self.exogTest).T
+        
         # Отображение ACF, PACF
-        plotCF(self.train)
+        plotCF(self.train, lags)
 
       
     # Сравнение двух функций на одном макете
     def CompareGraph(self, y1, y2, l1, l2, title):
+        
         plt.figure(figsize = (13, 6))
+        
         plt.plot(y1, label = l1)
         plt.plot(y2, label = l2)
 
         plt.title(f'Сравнение истинных и прогнозируемых значений {title}. ARIMA{self.optParam}')
+        
+        plt.xlabel('Время (YYYY-MM-DD)')
+        plt.ylabel('PM 2.5, мкг/м³')
         plt.legend()
         plt.grid()
         
         # Вычисление метрик
         metrics = Metrics(y1, y2)
-        
-        plt.table(cellText = metrics.values, colLabels = metrics.columns, loc='bottom')
-        plt.tick_params(axis='x', pad=-15)
-        plt.subplots_adjust(bottom=0.15)
-        
+        table = plt.table(cellText = metrics.values, colLabels = metrics.columns, loc = 'right', colWidths =[0.12, 0.12])
+        table.set_fontsize(20)
+        table.scale(1, 1.5)
+       
         if self.save == True:
             
-            self.path = f'{self.district}_{self.sensor}/{self.begin} — {self.end}'
+            self.path = f'Results/{self.district}_{self.sensor}/{self.begin} — {self.end}'
             
             if not os.path.exists(self.path):
                 os.mkdir(self.path)
-            plt.savefig(f'{self.path}/{title}.png')   
+                
+            # Название графика
+            figName = title
+            # Сезонная модель
+            if self.s:
+                figName += '_S'
+            # Экзогенные переменные
+            
+            # С экзогенными переменными
+            if self.exog_features:
+                for feat in self.exog_features:
+                    figName += '_' + feat
+            
+            plt.savefig(f'{self.path}/{figName}.png', bbox_inches='tight')
         
         plt.show()
 
@@ -278,7 +334,7 @@ class Forecaster:
         # Если применено преобразование Бокса-Кокса, обратить
         if lmbda != False:
             self.modVal = invboxcox(self.modVal, lmbda)
-
+        
         self.CompareGraph(self.train[:-1], self.modVal, 'Исходные данные', 'Данные, описываемые моделью', 'train')
 
     
@@ -289,28 +345,47 @@ class Forecaster:
         
         
     # Подбор гиперпараметров, построение модели
-    def getModel(self, p, d, q, use_optimal = True, save = True):
+    def getModel(self, p, d, q, P = 0, D = 0, Q = 0, s = 0, use_optimal = True, save = True):
         self.save = save
+        
+        self.s = s
+        
         # Поиск оптимальных гиперпараметров
         if use_optimal == True:
-            self.optParam = optimize_SARIMA(self.train, p = p , d = d, q = q)
+            
+            self.optParam = optimize_SARIMA(self.train, p = p , d = d, q = q, P = P, D = D, Q = Q, s = s, exog = self.exogTrain)
             self.d = self.optParam[1]
         else:
-            self.optParam = (p, d, q)
+            if self.s:
+                self.optParam = (p, d, q, P, D, Q)
+            else:
+                self.optParam = (p, d, q)
             self.d = d
           
         # Обучение модели и диагностика
-        self.model = getModel(self.train, self.optParam, s = 0)
+        self.model = getModel(self.train, self.optParam, self.s, self.exogTrain)
 
         # Модель на обучающей выборке
         self.TrainCompare()
 
         # Получение прогнозов
-        self.predictions = GetPred(self.model, self.start, self.end)
+        self.predictions = GetPred(self.model, self.start, self.end, self.exogTest)
 
         # Модель на тестовой выборке
         self.TestCompare()
         
         if self.save == True:
-            self.model.save(f'{self.path}/model.pkl')
+            # Тип модели S + ARIMA + X
+            modelType = 'ARIMA'
+            
+            # Сезонная
+            if self.s:
+                modelType = 'S' + modelType
+            # С экзогенными переменными
+            if self.exog_features:
+                modelType += 'X'
+                for feat in self.exog_features:
+                    modelType += '_' + feat
+               
+            self.model.save(f'{self.path}/{modelType}.pkl')
     
