@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import pylab
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
-from scipy import stats
+from scipy.stats import boxcox, pearsonr, spearmanr
 from datetime import datetime, timedelta
 
 from sklearn.metrics import r2_score, mean_absolute_percentage_error as smape
@@ -176,7 +176,7 @@ def invboxcox(y, lmbda):
 # Преобразование Бокса-Кокса
 def BoxCox(data):
     # Преобразование бокса-кокса
-    ValBC, lmbda = stats.boxcox(data.values)
+    ValBC, lmbda = boxcox(data.values)
     print('lambda =', lmbda)
     return ValBC, lmbda
 
@@ -223,7 +223,7 @@ def GetPred(model, start, end, exog = None, lmbda = False):
 # Класс прогнозирования
 class Forecaster:
     
-    def __init__(self, sensor, district, begin, start, end, exog_features = None, lags = None):
+    def __init__(self, sensor, district, begin, start, end, exog_features = None, fill = '', lags = None):
         self.district = district
         # Срез данных от begin до end
         self.begin = begin
@@ -236,7 +236,7 @@ class Forecaster:
         
         
         # Данные pm 2.5
-        self.df = pd.read_csv(f'pm25_{self.sensor}.csv', sep = ';', index_col = ['Date'], parse_dates = ['Date'])
+        self.df = pd.read_csv(f'pm25_{self.sensor}{fill}.csv', sep = ';', index_col = ['Date'], parse_dates = ['Date'])
         
         
         # Усреднение по некоторым датчикам, имеющие схожие показания
@@ -261,7 +261,7 @@ class Forecaster:
             # Цикл по экзогенным переменным
             for feature in exog_features:
                 
-                feat_df = pd.read_csv(f'Features/{feature}_{self.sensor}.csv', sep = ';', index_col = ['Date'], parse_dates = ['Date'])
+                feat_df = pd.read_csv(f'Features{fill}/{feature}_{self.sensor}.csv', sep = ';', index_col = ['Date'], parse_dates = ['Date'])
                 
                 # Усреднение по некоторым датчикам, имеющие схожие показания
                 if district == 'Mean' and sensor == 's':
@@ -269,10 +269,25 @@ class Forecaster:
 
                 feat_df = feat_df[district]
                 
+                print(feature)
+                
+                feat_df.plot()
+                
                 # Проверка на пропуски
                 nans = pd.isnull(feat_df[begin : end].values).sum()
                 if nans > 0:
-                    print('Пропуски в признаке', feature, ':', nans)
+                    print('Пропуски :', nans, '\n')
+                
+                # Проверка на пропуски
+                nans = pd.isnull(self.df[begin : end].values).sum()
+                if nans > 0:
+                    print('Пропуски в PM :', nans, '\n')
+                
+                print('Корреляция Пирсона:', round(pearsonr(self.train, feat_df[begin : start].values)[0], 3),'\nСпирмана:',  round(spearmanr(self.train, feat_df[begin : start].values)[0], 3), '\n')
+                
+                
+                    
+                
                 self.exogTrain.append(feat_df[begin : start].values)
                 self.exogTest.append(feat_df[start : end].values[1:])
             self.exogTrain = np.array(self.exogTrain).T
