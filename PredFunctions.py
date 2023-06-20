@@ -17,6 +17,7 @@ from sklearn.metrics import r2_score, mean_absolute_percentage_error as smape
 
 from itertools import product
 from tqdm.notebook import tqdm
+import seaborn as sns
 
 import os 
 
@@ -223,7 +224,7 @@ def GetPred(model, start, end, exog = None, lmbda = False):
 # Класс прогнозирования
 class Forecaster:
     
-    def __init__(self, sensor, district, begin, start, end, exog_features = None, fill = '', lags = None):
+    def __init__(self, sensor, district, begin, start, end, exog_features = ['Temperature', 'Wet', 'Pressure', 'Wind_speed', 'Wind_dir'], fill = '', lags = None):
         self.district = district
         # Срез данных от begin до end
         self.begin = begin
@@ -256,8 +257,8 @@ class Forecaster:
         self.exogTrain = None
         self.exogTest = None
         if exog_features:
-            self.exogTrain = []
-            self.exogTest = []
+            self.exogTrain = pd.DataFrame()
+            self.exogTest = pd.DataFrame()
             # Цикл по экзогенным переменным
             for feature in exog_features:
                 
@@ -269,29 +270,38 @@ class Forecaster:
 
                 feat_df = feat_df[district]
                 
-                print(feature)
-                
-                feat_df.plot()
                 
                 # Проверка на пропуски
                 nans = pd.isnull(feat_df[begin : end].values).sum()
                 if nans > 0:
-                    print('Пропуски :', nans, '\n')
+                    print(f'Пропуски в {feature} :', nans, '\n')
                 
                 # Проверка на пропуски
                 nans = pd.isnull(self.df[begin : end].values).sum()
                 if nans > 0:
                     print('Пропуски в PM :', nans, '\n')
                 
-                print('Корреляция Пирсона:', round(pearsonr(self.train, feat_df[begin : start].values)[0], 3),'\nСпирмана:',  round(spearmanr(self.train, feat_df[begin : start].values)[0], 3), '\n')
+                # Корреляции с pm
+                #print('Корреляция Пирсона:', round(pearsonr(self.train, feat_df[begin : start].values)[0], 3),'\nСпирмана:',  round(spearmanr(self.train, feat_df[begin : start].values)[0], 3), '\n')#
                 
                 
-                    
-                
-                self.exogTrain.append(feat_df[begin : start].values)
-                self.exogTest.append(feat_df[start : end].values[1:])
-            self.exogTrain = np.array(self.exogTrain).T
-            self.exogTest = np.array(self.exogTest).T
+                self.exogTrain[feature] = feat_df[begin : start].values
+                self.exogTest[feature] = feat_df[start : end].values[1:]
+            
+           
+             # Тепловая карта корреляций
+            self.exogTrain['PM'] = self.train.values
+            
+            sns.heatmap(data = self.exogTrain.corr(), annot=True)
+            plt.title('Корреляции Пирсона:')
+            plt.show()
+            
+            sns.heatmap(data = self.exogTrain.corr(method='spearman'), annot=True)
+            plt.title('Корреляции Спирмана:')
+            
+            self.exogTrain.drop(['PM'], axis = 1, inplace = True)
+            
+            
         
         # Отображение ACF, PACF
         plotCF(self.train, lags)
@@ -360,15 +370,25 @@ class Forecaster:
         
         
     # Подбор гиперпараметров, построение модели
-    def getModel(self, p, d, q, P = 0, D = 0, Q = 0, s = 0, use_optimal = True, save = True):
+    def getModel(self, p, d, q, P = 0, D = 0, Q = 0, s = 0, exog_features = None, use_optimal = True, save = False):
         self.save = save
         
         self.s = s
         
+        
+        # Использование заданных экзогенных признаков  
+        self.exog_features = exog_features 
+        if exog_features:
+            # Переход от df к значениям
+            self.exogTrainUsed = self.exogTrain[exog_features].values
+            self.exogTestUsed = self.exogTest[exog_features].values
+        else:
+            self.exogTrainUsed = self.exogTestUsed = None
+        
         # Поиск оптимальных гиперпараметров
         if use_optimal == True:
             
-            self.optParam = optimize_SARIMA(self.train, p = p , d = d, q = q, P = P, D = D, Q = Q, s = s, exog = self.exogTrain)
+            self.optParam = optimize_SARIMA(self.train, p = p , d = d, q = q, P = P, D = D, Q = Q, s = s, exog = self.exogTrainUsed)
             self.d = self.optParam[1]
         else:
             if self.s:
@@ -378,13 +398,13 @@ class Forecaster:
             self.d = d
           
         # Обучение модели и диагностика
-        self.model = getModel(self.train, self.optParam, self.s, self.exogTrain)
+        self.model = getModel(self.train, self.optParam, self.s, self.exogTrainUsed)
 
         # Модель на обучающей выборке
         self.TrainCompare()
 
         # Получение прогнозов
-        self.predictions = GetPred(self.model, self.start, self.end, self.exogTest)
+        self.predictions = GetPred(self.model, self.start, self.end, self.exogTestUsed)
 
         # Модель на тестовой выборке
         self.TestCompare()
