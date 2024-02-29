@@ -20,7 +20,7 @@ def Metrics(y, y_pred):
     return [mse, mae, mape, R2]
 
 
-def MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName = 'Errors', testUsed = False, x_test = [], y_test = [], plot = False, savePath = ''):
+def MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName = 'Errors', metricsCV = [], testUsed = False, x_test = [], y_test = [], plot = False, savePath = '', sheet_name = 'Results'):
     '''Формирование таблицы метрик на тренировочной и тестовой выборке
     '''
     
@@ -28,10 +28,18 @@ def MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName = 'Errors', t
     resDf = pd.DataFrame(index=['MSE', 'MAE', 'MAPE', 'R2'], data = 
                              {'Train': Metrics(y_train, model.predict(x_train)),
                              'Valid': Metrics(y_valid, model.predict(x_valid))})
+    
+    # Усреднение по валиду и кросс валидации
+    if len(metricsCV):
+        resDf['Valid + CV'] = (resDf['Valid'] + metricsCV) / 2
+        resDf.drop(['Valid'], axis = 1, inplace = True)
+    
     if testUsed:
         resDf['Test'] = Metrics(y_test, model.predict(x_test))
                         
     resDf.index.name = tableName
+    
+    
     display(resDf)
     
     
@@ -46,7 +54,6 @@ def MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName = 'Errors', t
     
     # Сохранение в файл
     if savePath:
-        sheet_name = f'est = {model.n_estimators}, smpl =  {model.min_samples_split}'
         
         # Номер последней строки в файле
         numRow = 0
@@ -134,7 +141,7 @@ def splitDataBySeason(df, season):
         return pd.concat([aut19, aut20, aut21, aut22])
     
 
-def ModelProcessing(model, sensor, fill, district, begin, end, season = '', valid_size = 0.3, test_index = [], params = None, gridSearch = True, paramDependencies = False, plotRes = False, featImp = False,
+def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '', valid_size = 0.3, season_test = '', params = None, gridSearch = True, paramDependencies = [], plotRes = False, featImp = False,
                        path = '../data/', savePath = ''):
     '''Обучение, подбор параметров, валидация, прогнозирование для выбранного класса моделей
     '''
@@ -169,13 +176,17 @@ def ModelProcessing(model, sensor, fill, district, begin, end, season = '', vali
     
     
     testUsed = False
-    # Формирование тестовой выборки
-    if len(test_index):
-        testUsed = True
-        test_index = list(set(pd.to_datetime(test_index)) & set(df.index))
-        x_test = df.loc[test_index].drop(['pm'], axis = 1)
-        y_test = df.loc[test_index]['pm']
-        df.drop(test_index, inplace = True)
+    
+    test_index = pd.read_csv(f"../data/test_index.csv", sep = ';', dayfirst = True, parse_dates = [0, 1, 2, 3])
+    for col in test_index.columns:
+        idx = list(set(test_index[col].dropna()) & set(df.index))
+        
+        if col == season_test:
+            testUsed = True
+            x_test = df.loc[idx].drop(['pm'], axis = 1)
+            y_test = df.loc[idx]['pm']
+       
+        df.drop(idx, inplace = True)
     
     df = df[begin : end]
     
@@ -184,8 +195,8 @@ def ModelProcessing(model, sensor, fill, district, begin, end, season = '', vali
     
     
     # Срез для выбранного сезона
-    if season:
-        df = splitDataBySeason(df, season)
+    if seasonModel:
+        df = splitDataBySeason(df, seasonModel)
     
     # Разбиение данных
     x = df.drop(['pm'], axis = 1)
@@ -196,56 +207,55 @@ def ModelProcessing(model, sensor, fill, district, begin, end, season = '', vali
     
     # Поиск по сетке
     if gridSearch:
-        model = GridSearchCV(estimator = model, param_grid = params, n_jobs = -1)
+        scoring = ['neg_mean_squared_error', 'neg_mean_absolute_error', 'neg_mean_absolute_percentage_error', 'r2' ]
+        model = GridSearchCV(estimator = model, param_grid = params, scoring = scoring, refit = 'r2', n_jobs = -1)
     else:
         model.set_params(**params)
     
     # Обучаем
     model.fit(x_train, y_train)
     
+    # Допольнительная колонка ошибок
+    metricsCV = []
     # Параметры лучшей модели
     if gridSearch:
+        param_grid = params
         params = model.best_params_
+        
+        # Качество по кросс валидации
+        scorings = pd.DataFrame(model.cv_results_)[list(map(lambda x : 'mean_test_' + x, scoring))]
+        metricsCV = scorings.iloc[np.where(scorings == model.best_score_)[0][0]].values
+        metricsCV[:3] = abs(metricsCV[:3])
+        
         model = model.best_estimator_
+        
         
     
     tableName += f" {params}"
     
     if testUsed:
-        MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName, testUsed, x_test, y_test, plotRes, savePath)
+        MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName, metricsCV, testUsed, x_test, y_test, plotRes, savePath)
     else:
-        MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName, testUsed, plotRes, savePath)
+        MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName, metricsCV, testUsed, plotRes, savePath)
     
     # Определение важности признаков
     if featImp: FeatureImportance(model)
         
         
-    # Зависимость качества от параметров (число деревьев и количество признаков в узле)
-    if paramDependencies:
+    # Зависимость качества от параметров
+    if len(paramDependencies):
+        # Название параметра
+        for paramName in paramDependencies:
+            loss_mse = []
+            for p in tqdm(param_grid[paramName]):
+                model.set_params(**{paramName: p})
+
+                model.fit(x_train, y_train)
+                loss_mse.append(mean_squared_error(model.predict(x_valid), y_valid))
         
-        loss_mse = []
-        # Изменение числа деревьев
-        n_est_range = range(1, 1002, 100)
-        for n_est in tqdm(n_est_range):
-            model.set_params(**{'n_estimators': n_est})
-            
-            model.fit(x_train, y_train)
-            loss_mse.append(mean_squared_error(model.predict(x_valid), y_valid))
-        
-        PlotGraph(n_est_range, loss_mse, 'n_estimators', 'MSE', f"Зависимость MSE от числа деревьев")
-        
-        loss_mse = []
-        # Изменение количества признаков в узле
-        max_feat_range = np.arange(0.1, 1.1, 0.1)
-        for max_feat in tqdm(max_feat_range):
-            model.set_params(**{'max_features': max_feat})
-            
-            model.fit(x_train, y_train)
-            loss_mse.append(mean_squared_error(model.predict(x_valid), y_valid))
-        
-        PlotGraph(max_feat_range, loss_mse, 'max_features', 'MSE', f"Зависимость MSE от количества признаков в узле")
+            PlotGraph(param_grid[paramName], loss_mse, paramName, 'MSE', f"Зависимость MSE от {paramName}")
     
-    
+
 def FeatureImportance(model):
     '''Вычисление и отрисовка важности признаков
     '''
