@@ -3,10 +3,12 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.linear_model import LinearRegression, Lasso, Ridge
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, mean_absolute_percentage_error
+
+from xgboost import XGBRegressor
 
 from openpyxl import load_workbook
 
@@ -36,7 +38,9 @@ def PredictAndMetrics(model, X, y, rnd = 2, plot = False, modelName = ''):
 
 
 # Применение линейной регрессии с train_test_split
-def Regression(X, y, ts, vs = 0, modelType = 'linear', alpha = 1.0):
+def Regression(X, y, ts, vs = 0, modelType = 'linear', param_dependences = False, alpha = 1.0):
+    
+    
     # В случае валидационной выборки, разделить в соотношении (1-vs-ts) : vs : ts
     if vs:
         # (1-vs-ts) : vs + ts
@@ -49,7 +53,7 @@ def Regression(X, y, ts, vs = 0, modelType = 'linear', alpha = 1.0):
     else:
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = ts, random_state = 100)
     
-    #display(X.shape, X_train.shape,X_valid.shape, X_test.shape )
+    #display(X.shape, X_train.shape, X_valid.shape, X_test.shape )
     
     # Создание и обучение модели
     if modelType == 'linear':
@@ -60,6 +64,45 @@ def Regression(X, y, ts, vs = 0, modelType = 'linear', alpha = 1.0):
         
     if modelType == 'ridge':
         model = Ridge(alpha = alpha)
+    
+    if modelType == 'xgbReg':
+
+        params = {
+            'n_estimators' : list(range(100, 15000, 1000)),
+            'learning_rate' : [0.05, 0.1, 0.2, 0.3, 0.5, 0.8]}
+
+        # Зависимость качества от параметров
+        if param_dependences:
+            mses = []
+            for n_est in params['n_estimators']:
+                model = XGBRegressor(booster = 'gblinear',  random_state = 100, n_estimators = n_est)
+                model.fit(X_train, y_train)
+
+                mses.append(PredictAndMetrics(model, X_valid, y_valid)[0])
+            
+            plt.figure(figsize = (8, 3))
+            plt.plot(params['n_estimators'], mses)
+            
+            plt.grid()
+            plt.show()
+            
+            mses = []
+            for lr in params['learning_rate']:
+                model = XGBRegressor(booster = 'gblinear',  random_state = 100, learning_rate = lr)
+                model.fit(X_train, y_train)
+
+                mses.append(PredictAndMetrics(model, X_valid, y_valid)[0])
+                
+            plt.figure(figsize = (8, 3))
+            plt.plot(params['learning_rate'], mses)
+            
+            plt.grid()
+            plt.show()
+        
+        model = XGBRegressor(booster = 'gblinear',  random_state = 100)
+        
+        model = GridSearchCV(estimator = model, param_grid = params)
+        
     
     model.fit(X_train, y_train)
     
@@ -85,7 +128,7 @@ def PolynomFeat(X, degree):
     return pol.fit_transform(X)
 
 # Построение различных моделей регрессии
-def BuildModels(data, forecastDays = 0, plot_forecast = False):
+def BuildModels(data, modelType = 'linReg', param_dependences = False, forecastDays = 0, plot_forecast = False):
     
     vs = 0.2
     ts = 0.1
@@ -102,12 +145,37 @@ def BuildModels(data, forecastDays = 0, plot_forecast = False):
     x = data.drop(['pm'], axis = 1)
     
     
+    metricNames = ['MSE', 'MAE', 'MAPE', 'R2', 'R2_adj']
+
+    # Бустинг регрессий
+    if modelType == 'xgbReg':
+        xgbRes = pd.DataFrame(index = metricNames)
+        
+        # Построение моделей и вычисление ошибок
+        if ts:
+            model, metr = Regression(x, y, ts = ts, vs = vs, modelType = modelType, param_dependences = param_dependences)
+        else:
+            model, metr = Regression(x, y, ts = vs, modelType = modelType, param_dependences = param_dependences)
+        
+        pd.DataFrame(index = ['1',' 2', '3'], data = {'Train' : [4, 5, 6]})
+        xgbRes['Train'] = metr[0]
+        xgbRes['Valid'] = metr[1]
+        
+        if ts: xgbRes['Test'] = metr[2]
+        
+        if forecastDays:
+            xgbRes['Forecast'] = PredictAndMetrics(model, X_forecast, y_forecast, plot = plot_forecast, modelName = mod)
+        
+        xgbRes.index.name = str(model.best_params_)
+        
+        display(xgbRes)
+        
+        return [xgbRes]
+
     
     linTypes = ['linear', 'lasso', 'ridge']
     polDegr = [2, 3]
-
-    metricNames = ['MSE', 'MAE', 'MAPE', 'R2', 'R2_adj']
-
+    
     train_res = pd.DataFrame({'Train ' : metricNames})
 
     valid_res = pd.DataFrame({'Valid ' :  metricNames}) 
@@ -116,8 +184,8 @@ def BuildModels(data, forecastDays = 0, plot_forecast = False):
     if ts: test_res = pd.DataFrame({'Test ' : metricNames})
     
     if forecastDays: forecast_res = pd.DataFrame({'Forecast ' : metricNames})
-
     
+
     # Линейные регрессии
     for mod in linTypes:
 
@@ -153,7 +221,7 @@ def BuildModels(data, forecastDays = 0, plot_forecast = False):
             
         if forecastDays:
             forecast_res[polName] = PredictAndMetrics(model, PolynomFeat(X_forecast, degr), y_forecast)
-
+            
     #print('Тренировочная выборка')
     display(train_res)
     
