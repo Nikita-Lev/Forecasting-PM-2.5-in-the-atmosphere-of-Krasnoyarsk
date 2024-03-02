@@ -1,5 +1,4 @@
 ### Методы для построения регрессий
-
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -8,6 +7,8 @@ from sklearn.linear_model import LinearRegression, Lasso, Ridge
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, mean_absolute_percentage_error
 
+from tqdm import tqdm
+
 from xgboost import XGBRegressor
 
 from openpyxl import load_workbook
@@ -15,8 +16,11 @@ from openpyxl import load_workbook
 # Срез количества дней для тестовой выборки
 maxForecastDays = 5
 
-# Сравнение графиков двух списков значений
+
 def CompareGraph(x, y1, y2, l1, l2, title):
+    ''' Сравнение графиков двух списков значений
+    '''
+    
     plt.figure(figsize = (9, 4))
     plt.plot(x, y1, label = l1)
     plt.plot(x, y2, label = l2)
@@ -28,32 +32,78 @@ def CompareGraph(x, y1, y2, l1, l2, title):
     plt.legend()
     plt.grid()
     
-# Прогнозы линейной регрессии и вычисление ошибок
+    
 def PredictAndMetrics(model, X, y, rnd = 2, plot = False, modelName = ''):
+    ''' Прогнозы линейной регрессии и вычисление ошибок
+    '''
+    
     y_pred = model.predict(X)
     
     if plot:
         CompareGraph(y.index, y, y_pred, 'Истинные значения', 'Пронозируемые значения', f'Сравнение прогноза {modelName} с истинными данными')
     return list(map(lambda i: round(i, rnd), [mean_squared_error(y, y_pred), mean_absolute_error(y, y_pred), mean_absolute_percentage_error(y, y_pred), r2_score(y, y_pred), 1 - (1-r2_score(y, y_pred))*(X.shape[0] - 1) / (X.shape[0] - X.shape[1] - 1)]))
 
-
-# Применение линейной регрессии с train_test_split
-def Regression(X, y, ts, vs = 0, modelType = 'linear', param_dependences = False, alpha = 1.0):
+ 
+def splitDataBySeason(df, season):
+    ''' Разделение данных по сезонам
+    '''
     
+    # Зима
+    if season == 'winters':
+        win19 = df[:'2019-03-01 00:00:00']
+        win19_20 = df['2019-11-27 00:00:00':'2020-02-27 00:00:00']
+        win20_21 = df['2020-11-27 00:00:00':'2021-02-25 00:00:00']
+        win21_22 = df['2021-12-15 00:00:00':'2022-02-22 00:00:00']
+        win22_23 = df['2022-12-13 00:00:00' : '2023-02-22 00:00:00']
+
+        return pd.concat([win19, win19_20, win20_21, win21_22, win22_23])
+    
+    # Весна
+    if season == 'springs':
+        spr19 = pd.concat([df['2019-03-10' : '2019-05-01'], df['2019-11-01' : '2019-11-22']])
+        spr20 = pd.concat([df['2020-03-01' : '2020-05-01'], df['2020-11-01' : '2020-11-10']])
+        spr21 = pd.concat([df['2021-03-10' : '2021-05-01'], df['2021-11-01' : '2021-11-25']])
+        spr22 = pd.concat([df['2022-03-01' : '2022-05-01'], df['2022-11-01' : '2022-11-25']])
+        spr23 = df['2023-03-01' : ]
+
+        return pd.concat([spr19, spr20, spr21, spr22, spr23])
+
+    # Лето
+    if season == 'summers':
+        sum19 = df['2019-05-01' : '2019-07-12']
+        sum20 = df['2020-05-01' : '2020-08-01']
+        sum21 = df['2021-05-01' : '2021-08-01']
+        sum22 = df['2022-05-01' : '2022-08-01']
+
+        return pd.concat([sum19, sum20, sum21, sum22])
+    
+    # Осень
+    if season == 'autumns':
+        aut19 = df['2019-08-21' : '2019-10-16']
+        aut20 = df['2020-08-17' : '2020-10-30']
+        aut21 = df['2021-08-15' : '2021-11-01']
+        aut22 = df['2022-08-01' : '2022-10-14']
+
+        return pd.concat([aut19, aut20, aut21, aut22])
+
+
+def Regression(X, y, ts, vs = 0, modelType = 'linear', param_dependences = [], alpha = 1.0):
+    '''Построение модели регрессии, подбор гиперпараметров в случае бустинга регрессий
+    '''
     
     # В случае валидационной выборки, разделить в соотношении (1-vs-ts) : vs : ts
     if vs:
         # (1-vs-ts) : vs + ts
-        X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size = ts + vs, random_state = 100)
+        x_train, x_valid, y_train, y_valid = train_test_split(X, y, test_size = ts + vs, random_state = 100)
         
         # vs : ts
-        X_valid, X_test, y_valid, y_test = train_test_split(X_valid, y_valid, test_size = ts / (vs + ts), random_state = 100) 
+        x_valid, x_test, y_valid, y_test = train_test_split(x_valid, y_valid, test_size = ts / (vs + ts), random_state = 100) 
         
     
     else:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = ts, random_state = 100)
+        x_train, x_test, y_train, y_test = train_test_split(X, y, test_size = ts, random_state = 100)
     
-    #display(X.shape, X_train.shape, X_valid.shape, X_test.shape )
+    #display(X.shape, x_train.shape, x_valid.shape, x_test.shape )
     
     # Создание и обучение модели
     if modelType == 'linear':
@@ -68,67 +118,66 @@ def Regression(X, y, ts, vs = 0, modelType = 'linear', param_dependences = False
     if modelType == 'xgbReg':
 
         params = {
-            'n_estimators' : list(range(100, 15000, 1000)),
-            'learning_rate' : [0.05, 0.1, 0.2, 0.3, 0.5, 0.8]}
-
-        # Зависимость качества от параметров
-        if param_dependences:
-            mses = []
-            for n_est in params['n_estimators']:
-                model = XGBRegressor(booster = 'gblinear',  random_state = 100, n_estimators = n_est)
-                model.fit(X_train, y_train)
-
-                mses.append(PredictAndMetrics(model, X_valid, y_valid)[0])
-            
-            plt.figure(figsize = (8, 3))
-            plt.plot(params['n_estimators'], mses)
-            
-            plt.grid()
-            plt.show()
-            
-            mses = []
-            for lr in params['learning_rate']:
-                model = XGBRegressor(booster = 'gblinear',  random_state = 100, learning_rate = lr)
-                model.fit(X_train, y_train)
-
-                mses.append(PredictAndMetrics(model, X_valid, y_valid)[0])
-                
-            plt.figure(figsize = (8, 3))
-            plt.plot(params['learning_rate'], mses)
-            
-            plt.grid()
-            plt.show()
+            'n_estimators' : list(range(100, 10000, 1000)),
+            'learning_rate' : [0.05, 0.1, 0.2, 0.3, 0.5]}
         
         model = XGBRegressor(booster = 'gblinear',  random_state = 100)
         
         model = GridSearchCV(estimator = model, param_grid = params)
         
+        
+    model.fit(x_train, y_train)
     
-    model.fit(X_train, y_train)
+    # Зависимость качества от параметров
+    if modelType == 'xgbReg' and len(param_dependences):
+        # Название параметра
+        for paramName in param_dependences:
+            xgb_top = model.best_estimator_
+            loss_mse = []
+            for p in tqdm(params[paramName]):
+                xgb_top.set_params(**{paramName: p})
+
+                xgb_top.fit(x_train, y_train)
+                loss_mse.append(mean_squared_error(xgb_top.predict(x_valid), y_valid))
+
+            plt.figure(figsize = (8, 3))
+            plt.plot(params[paramName], loss_mse)
+            
+            plt.title(f"Зависимость MSE от {paramName}")
+            plt.xlabel(paramName)
+            plt.ylabel('MSE')
+            
+            plt.grid()
+            plt.show()
     
     # Список ошибок
     metr = []
     
     # Тренировочная выборка 
-    metr.append(PredictAndMetrics(model, X_train, y_train))
+    metr.append(PredictAndMetrics(model, x_train, y_train))
     
     # Валидационная выборка
     if vs:
-        metr.append(PredictAndMetrics(model, X_valid, y_valid))
+        metr.append(PredictAndMetrics(model, x_valid, y_valid))
     
     # Тестовая выборка
-    metr.append(PredictAndMetrics(model, X_test, y_test))
+    metr.append(PredictAndMetrics(model, x_test, y_test))
     
     return model, metr
 
-# Возведение признаков в степень
+
 def PolynomFeat(X, degree):
+    ''' Возведение признаков в степень
+    '''
+    
     # Возведение признаков в степень
     pol = PolynomialFeatures(degree = degree)
     return pol.fit_transform(X)
 
-# Построение различных моделей регрессии
+
 def BuildModels(data, modelType = 'linReg', param_dependences = False, forecastDays = 0, plot_forecast = False):
+    ''' Построение различных моделей регрессии
+    '''
     
     vs = 0.2
     ts = 0.1
@@ -241,8 +290,11 @@ def BuildModels(data, modelType = 'linReg', param_dependences = False, forecastD
         
     return results
 
-# Отбор признаков, наиболее коррелирующих с PM, исключая мультиколлинеарность
+
 def featureSelect(matr, features, corrPMvalue = 0.2, corrFeatValue = 0.6):
+    '''  Отбор признаков, наиболее коррелирующих с PM, исключая мультиколлинеарность
+    '''
+    
     # Признаки, коррелирующие с другими
     corrFeatures = []
     for feat in matr.apply(abs).sort_values(by='pm', ascending=False)[1:].index:
@@ -255,9 +307,12 @@ def featureSelect(matr, features, corrPMvalue = 0.2, corrFeatValue = 0.6):
                 # Если корреляция Спирмена составляет больше 0.6
                 if fcor != feat and abs(cor) >= corrFeatValue:
                     corrFeatures.append(fcor)
+                    
 
-# Сохранение результатов в файл
 def SaveResults(savePath, fileName, df, sheetName = 'results', features = [], corr = None):
+    ''' Сохранение результатов в файл
+    '''
+    
     # Извлечение номера последней строки в файле
     numRow = 0
     wb = load_workbook(savePath + fileName)
@@ -273,7 +328,7 @@ def SaveResults(savePath, fileName, df, sheetName = 'results', features = [], co
             pd.DataFrame({'Признаки' : features, 'Корреляция Спирмена с pm' : corr}).to_excel(writer, sheet_name = sheetName, startrow = numRow, startcol = df[0].shape[1] + 1, index = False)
 
         for resDf in df:
-            resDf.to_excel(writer, sheet_name = sheetName, startrow = numRow, index = False)
+            resDf.to_excel(writer, sheet_name = sheetName, startrow = numRow, index = True)
 
             numRow += resDf.shape[0] + 3
     
