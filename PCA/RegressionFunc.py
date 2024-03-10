@@ -1,5 +1,6 @@
 ### Методы для построения регрессий
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 
 from sklearn.model_selection import train_test_split, GridSearchCV
@@ -99,11 +100,73 @@ def Regression(X, y, ts, vs = 0, modelType = 'linear', param_dependences = [], a
         # vs : ts
         x_valid, x_test, y_valid, y_test = train_test_split(x_valid, y_valid, test_size = ts / (vs + ts), random_state = 100) 
         
-    
     else:
         x_train, x_test, y_train, y_test = train_test_split(X, y, test_size = ts, random_state = 100)
     
     #display(X.shape, x_train.shape, x_valid.shape, x_test.shape )
+    
+    if modelType == 'xgbReg':
+
+        params = {
+            'n_estimators' : np.linspace(100, 8000, 11).astype('int'),
+            'learning_rate' : [0.05, 0.1, 0.2, 0.3, 0.5]}
+        
+        model = XGBRegressor(booster = 'gblinear',  random_state = 100)
+                
+        scoring = ['neg_mean_squared_error', 'neg_mean_absolute_error', 'neg_mean_absolute_percentage_error', 'r2' ]
+        
+        model = GridSearchCV(estimator = model, param_grid = params, scoring = scoring, refit = 'r2', n_jobs = -1)
+        
+        
+        # Обучение
+        model.fit(x_train, y_train)
+                
+        # Допольнительная колонка ошибок по кросс-валидации
+        metricsCV = []
+        
+        # Качество по кросс валидации
+        scorings = pd.DataFrame(model.cv_results_)[list(map(lambda x : 'mean_test_' + x, scoring))]
+        metricsCV = np.round(scorings.iloc[np.where(scorings == model.best_score_)[0][0]].values, 2)
+        metricsCV[:3] = abs(metricsCV[:3])
+        
+        
+        # Список ошибок
+        metr = []
+
+        # Тренировочная выборка 
+        metr.append(PredictAndMetrics(model, x_train, y_train))
+        
+        # Качество по кросс-валидации
+        metr.append(np.append(metricsCV, np.nan))
+        
+        # Тестовая выборка
+        metr.append(PredictAndMetrics(model, x_test, y_test))
+        
+        # Зависимость качества от параметров
+        if len(param_dependences):
+            xgb_top = model.best_estimator_
+            
+            x_train, x_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state = 100)
+            # Название параметра
+            for paramName in param_dependences:
+                loss_mse = []
+                for p in tqdm(params[paramName]):
+                    xgb_top.set_params(**{paramName: p})
+
+                    xgb_top.fit(x_train, y_train)
+                    loss_mse.append(mean_squared_error(xgb_top.predict(x_test), y_test))
+
+                plt.figure(figsize = (8, 3))
+                plt.plot(params[paramName], loss_mse)
+
+                plt.title(f"Зависимость MSE от {paramName}")
+                plt.xlabel(paramName)
+                plt.ylabel('MSE')
+
+                plt.grid()
+                plt.show()
+            
+        return model, metr
     
     # Создание и обучение модели
     if modelType == 'linear':
@@ -114,41 +177,8 @@ def Regression(X, y, ts, vs = 0, modelType = 'linear', param_dependences = [], a
         
     if modelType == 'ridge':
         model = Ridge(alpha = alpha)
-    
-    if modelType == 'xgbReg':
-
-        params = {
-            'n_estimators' : list(range(100, 10000, 1000)),
-            'learning_rate' : [0.05, 0.1, 0.2, 0.3, 0.5]}
-        
-        model = XGBRegressor(booster = 'gblinear',  random_state = 100)
-        
-        model = GridSearchCV(estimator = model, param_grid = params)
-        
         
     model.fit(x_train, y_train)
-    
-    # Зависимость качества от параметров
-    if modelType == 'xgbReg' and len(param_dependences):
-        # Название параметра
-        for paramName in param_dependences:
-            xgb_top = model.best_estimator_
-            loss_mse = []
-            for p in tqdm(params[paramName]):
-                xgb_top.set_params(**{paramName: p})
-
-                xgb_top.fit(x_train, y_train)
-                loss_mse.append(mean_squared_error(xgb_top.predict(x_valid), y_valid))
-
-            plt.figure(figsize = (8, 3))
-            plt.plot(params[paramName], loss_mse)
-            
-            plt.title(f"Зависимость MSE от {paramName}")
-            plt.xlabel(paramName)
-            plt.ylabel('MSE')
-            
-            plt.grid()
-            plt.show()
     
     # Список ошибок
     metr = []
@@ -175,7 +205,7 @@ def PolynomFeat(X, degree):
     return pol.fit_transform(X)
 
 
-def BuildModels(data, modelType = 'linReg', param_dependences = False, forecastDays = 0, plot_forecast = False):
+def BuildModels(data, modelType = 'linReg', param_dependences = [], forecastDays = 0, plot_forecast = False):
     ''' Построение различных моделей регрессии
     '''
     
@@ -198,6 +228,8 @@ def BuildModels(data, modelType = 'linReg', param_dependences = False, forecastD
 
     # Бустинг регрессий
     if modelType == 'xgbReg':
+        vs = 0
+        
         xgbRes = pd.DataFrame(index = metricNames)
         
         # Построение моделей и вычисление ошибок
@@ -208,7 +240,7 @@ def BuildModels(data, modelType = 'linReg', param_dependences = False, forecastD
         
         pd.DataFrame(index = ['1',' 2', '3'], data = {'Train' : [4, 5, 6]})
         xgbRes['Train'] = metr[0]
-        xgbRes['Valid'] = metr[1]
+        xgbRes['CV'] = metr[1]
         
         if ts: xgbRes['Test'] = metr[2]
         
