@@ -12,27 +12,29 @@ def Metrics(y, y_pred):
     '''Вычисление метрик качества прогнозов
     '''
     
-    mse = round(mean_squared_error(y, y_pred), 4)
-    mae = round(mean_absolute_error(y, y_pred), 4)
-    mape = round(mean_absolute_percentage_error(y, y_pred), 4)
-    R2 = round(r2_score(y, y_pred), 4)
+    mse = round(mean_squared_error(y, y_pred), 2)
+    mae = round(mean_absolute_error(y, y_pred), 2)
+    mape = round(mean_absolute_percentage_error(y, y_pred), 2)
+    R2 = round(r2_score(y, y_pred), 2)
     
     return [mse, mae, mape, R2]
 
 
-def MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName = 'Errors', metricsCV = [], testUsed = False, x_test = [], y_test = [], plot = False, savePath = '', sheet_name = 'Results'):
+def MetricsDF(model, x_train, y_train, x_valid = [], y_valid = [], tableName = 'Errors', metricsCV = [], testUsed = False, x_test = [], y_test = [], plot = False, savePath = '', sheet_name = 'По годам CV'):
     '''Формирование таблицы метрик на тренировочной и тестовой выборке
     '''
     
     
-    resDf = pd.DataFrame(index=['MSE', 'MAE', 'MAPE', 'R2'], data = 
-                             {'Train': Metrics(y_train, model.predict(x_train)),
-                             'Valid': Metrics(y_valid, model.predict(x_valid))})
+    resDf = pd.DataFrame(index = ['MSE', 'MAE', 'MAPE', 'R2'],
+                         data = {'Train': Metrics(y_train, model.predict(x_train))}
+                        )
     
-    # Усреднение по валиду и кросс валидации
+    if len(x_valid):
+        resDf['Valid'] = Metrics(y_valid, model.predict(x_valid))
+        
+    
     if len(metricsCV):
-        resDf['Valid + CV'] = (resDf['Valid'] + metricsCV) / 2
-        resDf.drop(['Valid'], axis = 1, inplace = True)
+        resDf['CV'] = metricsCV
     
     if testUsed:
         resDf['Test'] = Metrics(y_test, model.predict(x_test))
@@ -43,10 +45,10 @@ def MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName = 'Errors', m
     display(resDf)
     
     
-    if plot:
+    if plot and len(x_valid):
         x_valid.sort_index(inplace = True)
         y_valid.sort_index(inplace = True)
-        CompareGraph(y_valid.index, y_valid, model.predict(x_valid), 'Истинные значения', 'Прогнозируемые значения', 'Сравнение прогноза с истинными данными. Valid')
+        CompareGraph(y_valid.index, y_valid, model.predict(x_valid), 'Истинные значения', 'Прогнозируемые значения', 'Сравнение прогноза с истинными данными')
         if testUsed:
             x_test.sort_index(inplace = True)
             y_test.sort_index(inplace = True)
@@ -202,41 +204,47 @@ def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '',
     x = df.drop(['pm'], axis = 1)
     y = df['pm']
 
-    # train : valid выборки 1-valid_size : valid_size
-    x_train, x_valid, y_train, y_valid = train_test_split(x, y, test_size = valid_size, random_state=1)
-    
-    # Поиск по сетке
+    # Поиск по сетке (оценка качества по кросс-валидации)
     if gridSearch:
         scoring = ['neg_mean_squared_error', 'neg_mean_absolute_error', 'neg_mean_absolute_percentage_error', 'r2' ]
         model = GridSearchCV(estimator = model, param_grid = params, scoring = scoring, refit = 'r2', n_jobs = -1)
-    else:
-        model.set_params(**params)
-    
-    # Обучаем
-    model.fit(x_train, y_train)
-    
-    # Допольнительная колонка ошибок
-    metricsCV = []
-    # Параметры лучшей модели
-    if gridSearch:
+        
+        # Валидация не используется
+        x_train, x_valid, y_train, y_valid = x, [], y, []
+        
+        # Обучение
+        model.fit(x_train, y_train)
+        
         param_grid = params
         params = model.best_params_
         
+        # Допольнительная колонка ошибок по кросс-валидации
+        metricsCV = []
+        
+        
         # Качество по кросс валидации
         scorings = pd.DataFrame(model.cv_results_)[list(map(lambda x : 'mean_test_' + x, scoring))]
-        metricsCV = scorings.iloc[np.where(scorings == model.best_score_)[0][0]].values
+        metricsCV = np.round(scorings.iloc[np.where(scorings == model.best_score_)[0][0]].values, 2)
         metricsCV[:3] = abs(metricsCV[:3])
         
         model = model.best_estimator_
         
+    else:
+        # train : valid выборки 1-valid_size : valid_size
+        x_train, x_valid, y_train, y_valid = train_test_split(x, y, test_size = valid_size, random_state = 100)
         
+        model.set_params(**params)
+    
+        # Обучение
+        model.fit(x_train, y_train)
+    
     
     tableName += f" {params}"
     
     if testUsed:
-        MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName, metricsCV, testUsed, x_test, y_test, plotRes, savePath)
+        MetricsDF(model, x_train, y_train, x_valid, y_valid, tableName, metricsCV, testUsed, x_test, y_test, plotRes, savePath)
     else:
-        MetricsDF(model, x_train, x_valid, y_train, y_valid, tableName, metricsCV, testUsed, plotRes, savePath)
+        MetricsDF(model, x_train, y_train, x_valid, y_valid, tableName, metricsCV, testUsed, plotRes, savePath)
     
     # Определение важности признаков
     if featImp: FeatureImportance(model)
@@ -244,6 +252,7 @@ def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '',
         
     # Зависимость качества от параметров
     if len(paramDependencies):
+        x_train, x_test, y_train, y_test = train_test_split(x, y, test_size = 0.3, random_state = 100)
         # Название параметра
         for paramName in paramDependencies:
             loss_mse = []
@@ -251,7 +260,7 @@ def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '',
                 model.set_params(**{paramName: p})
 
                 model.fit(x_train, y_train)
-                loss_mse.append(mean_squared_error(model.predict(x_valid), y_valid))
+                loss_mse.append(mean_squared_error(model.predict(x_test), y_test))
         
             PlotGraph(param_grid[paramName], loss_mse, paramName, 'MSE', f"Зависимость MSE от {paramName}")
     
