@@ -35,7 +35,7 @@ def CompareGraph(x, y1, y2, l1, l2, title):
     
     
 def PredictAndMetrics(model, X, y, rnd = 2, plot = False, modelName = ''):
-    ''' Прогнозы линейной регрессии и вычисление ошибок
+    ''' Прогнозы модели и вычисление ошибок
     '''
     
     y_pred = model.predict(X)
@@ -51,13 +51,13 @@ def splitDataBySeason(df, season):
     
     # Зима
     if season == 'winters':
-        win19 = df[:'2019-03-01 00:00:00']
-        win19_20 = df['2019-11-27 00:00:00':'2020-02-27 00:00:00']
-        win20_21 = df['2020-11-27 00:00:00':'2021-02-25 00:00:00']
-        win21_22 = df['2021-12-15 00:00:00':'2022-02-22 00:00:00']
+        win19 = df[: '2019-03-01 00:00:00']
+        win19_20 = df['2019-11-27 00:00:00' : '2020-02-27 00:00:00']
+        win20_21 = df['2020-11-27 00:00:00' : '2021-02-25 00:00:00']
+        win21_22 = df['2021-12-15 00:00:00' : '2022-02-22 00:00:00']
         win22_23 = df['2022-12-13 00:00:00' : '2023-02-22 00:00:00']
-
-        return pd.concat([win19, win19_20, win20_21, win21_22, win22_23])
+        win23_24 = df['2023-11-28 00:00:00' : '2024-02-20 00:00:00']
+        return pd.concat([win19, win19_20, win20_21, win21_22, win22_23, win23_24])
     
     # Весна
     if season == 'springs':
@@ -65,9 +65,10 @@ def splitDataBySeason(df, season):
         spr20 = pd.concat([df['2020-03-01' : '2020-05-01'], df['2020-11-01' : '2020-11-10']])
         spr21 = pd.concat([df['2021-03-10' : '2021-05-01'], df['2021-11-01' : '2021-11-25']])
         spr22 = pd.concat([df['2022-03-01' : '2022-05-01'], df['2022-11-01' : '2022-11-25']])
-        spr23 = df['2023-03-01' : ]
+        spr23 = pd.concat([df['2023-03-01' : '2023-05-01'], df['2023-11-01' : '2023-11-27']])
+        spr24 = df['2024-03-01' :]
 
-        return pd.concat([spr19, spr20, spr21, spr22, spr23])
+        return pd.concat([spr19, spr20, spr21, spr22, spr23, spr24])
 
     # Лето
     if season == 'summers':
@@ -75,8 +76,9 @@ def splitDataBySeason(df, season):
         sum20 = df['2020-05-01' : '2020-08-01']
         sum21 = df['2021-05-01' : '2021-08-01']
         sum22 = df['2022-05-01' : '2022-08-01']
+        sum23 = df['2023-05-03' : '2023-08-05']
 
-        return pd.concat([sum19, sum20, sum21, sum22])
+        return pd.concat([sum19, sum20, sum21, sum22, sum23])
     
     # Осень
     if season == 'autumns':
@@ -84,24 +86,18 @@ def splitDataBySeason(df, season):
         aut20 = df['2020-08-17' : '2020-10-30']
         aut21 = df['2021-08-15' : '2021-11-01']
         aut22 = df['2022-08-01' : '2022-10-14']
+        aut23 = df['2023-08-10' : '2023-10-25']
 
-        return pd.concat([aut19, aut20, aut21, aut22])
+        return pd.concat([aut19, aut20, aut21, aut22, aut23])
 
 
-def Regression(X, y, ts, vs = 0, modelType = 'linear', param_dependences = [], alpha = 1.0):
+def Regression(X, y, vs = 0, modelType = 'linear', x_test = [], y_test = [], param_dependences = [], alpha = 1.0):
     '''Построение модели регрессии, подбор гиперпараметров в случае бустинга регрессий
     '''
-    
-    # В случае валидационной выборки, разделить в соотношении (1-vs-ts) : vs : ts
     if vs:
-        # (1-vs-ts) : vs + ts
-        x_train, x_valid, y_train, y_valid = train_test_split(X, y, test_size = ts + vs, random_state = 100)
-        
-        # vs : ts
-        x_valid, x_test, y_valid, y_test = train_test_split(x_valid, y_valid, test_size = ts / (vs + ts), random_state = 100) 
-        
+        x_train, x_valid, y_train, y_valid = train_test_split(X, y, test_size = vs, random_state = 100)
     else:
-        x_train, x_test, y_train, y_test = train_test_split(X, y, test_size = ts, random_state = 100)
+        x_train, y_train = X, y
     
     #display(X.shape, x_train.shape, x_valid.shape, x_test.shape )
     
@@ -205,47 +201,49 @@ def PolynomFeat(X, degree):
     return pol.fit_transform(X)
 
 
-def BuildModels(data, modelType = 'linReg', param_dependences = [], forecastDays = 0, plot_forecast = False):
+def BuildModels(data, modelType = 'linReg', testSeason = '', param_dependences = [], forecast = False, plot_forecast = False):
     ''' Построение различных моделей регрессии
     '''
     
     vs = 0.2
     ts = 0.1
     
-    # Срез данных для прогнозирования
-    if forecastDays:
-        X_forecast = data.iloc[-maxForecastDays: data.shape[0] - maxForecastDays + forecastDays].drop(['pm'], axis = 1)
-        y_forecast = data.iloc[-maxForecastDays: data.shape[0] - maxForecastDays + forecastDays]['pm']
     
-    data = data.iloc[:-maxForecastDays]
-    
+    # Формирование тестовой выборки для данного сезона
+    x_test, y_test = [], []
+    if testSeason:
+        test_index = pd.read_csv(f"../data/test_index.csv", sep = ';', dayfirst = True, parse_dates = [0, 1, 2, 3])
+        for col in test_index.columns:
+            idx = list(set(test_index[col].dropna()) & set(data.index))
+
+
+            if col == testSeason:
+                x_test = data.loc[idx].drop(['pm'], axis = 1)
+                y_test = data.loc[idx]['pm']
+
+            data.drop(idx, inplace = True)
     # Целевая переменная и признаки
     y = data['pm']
     x = data.drop(['pm'], axis = 1)
-    
     
     metricNames = ['MSE', 'MAE', 'MAPE', 'R2', 'R2_adj']
 
     # Бустинг регрессий
     if modelType == 'xgbReg':
         vs = 0
-        
         xgbRes = pd.DataFrame(index = metricNames)
         
         # Построение моделей и вычисление ошибок
-        if ts:
-            model, metr = Regression(x, y, ts = ts, vs = vs, modelType = modelType, param_dependences = param_dependences)
-        else:
-            model, metr = Regression(x, y, ts = vs, modelType = modelType, param_dependences = param_dependences)
+        model, metr = Regression(x, y, vs, modelType, x_test, y_test, param_dependences = param_dependences)
         
         pd.DataFrame(index = ['1',' 2', '3'], data = {'Train' : [4, 5, 6]})
         xgbRes['Train'] = metr[0]
         xgbRes['CV'] = metr[1]
         
-        if ts: xgbRes['Test'] = metr[2]
+        if testSeason: xgbRes['Test'] = metr[2]
         
-        if forecastDays:
-            xgbRes['Forecast'] = PredictAndMetrics(model, X_forecast, y_forecast, plot = plot_forecast, modelName = mod)
+        if forecast:
+            xgbRes['Forecast'] = PredictAndMetrics(model, X_forecast, y_forecast, plot = plot_forecast)
         
         xgbRes.index.name = str(model.best_params_)
         
@@ -262,45 +260,39 @@ def BuildModels(data, modelType = 'linReg', param_dependences = [], forecastDays
     valid_res = pd.DataFrame({'Valid ' :  metricNames}) 
     
     # Используется тестовая выборка
-    if ts: test_res = pd.DataFrame({'Test ' : metricNames})
+    if testSeason: test_res = pd.DataFrame({'Test ' : metricNames})
     
-    if forecastDays: forecast_res = pd.DataFrame({'Forecast ' : metricNames})
+    if forecast: forecast_res = pd.DataFrame({'Forecast ' : metricNames})
     
 
     # Линейные регрессии
     for mod in linTypes:
 
         # Построение моделей и вычисление ошибок
-        if ts:
-            model, metr = Regression(x, y, ts = ts, vs = vs, modelType = mod)
-        else:
-            model, metr = Regression(x, y, ts = vs, modelType = mod)
+        model, metr = Regression(x, y, vs, mod, x_test, y_test)
 
         train_res[mod] = metr[0]
         valid_res[mod] = metr[1]
         
-        if ts: test_res[mod] = metr[2]
+        if testSeason: test_res[mod] = metr[2]
         
-        if forecastDays:
+        if forecast:
             forecast_res[mod] = PredictAndMetrics(model, X_forecast, y_forecast, plot = plot_forecast, modelName = mod)
         
     # Полиномиальные регрессии    
     for degr in polDegr:
 
         # Построение моделей и вычисление ошибок
-        if ts:
-            model, metr = Regression(PolynomFeat(x, degr), y, ts = ts, vs = vs)
-        else:
-            model, metr = Regression(PolynomFeat(x, degr), y, ts = vs)
+        model, metr = Regression(PolynomFeat(x, degr), y, vs, x_test, y_test)
         
         polName = f'Полиномиальная {degr} степени'
         
         train_res[polName] = metr[0]
         valid_res[polName] = metr[1]
         
-        if ts: test_res[polName] = metr[2]
+        if testSeason: test_res[polName] = metr[2]
             
-        if forecastDays:
+        if forecast:
             forecast_res[polName] = PredictAndMetrics(model, PolynomFeat(X_forecast, degr), y_forecast)
             
     #print('Тренировочная выборка')
@@ -311,12 +303,12 @@ def BuildModels(data, modelType = 'linReg', param_dependences = [], forecastDays
     
     results = [train_res, valid_res]
     
-    if ts:
+    if testSeason:
         display(test_res)
         results.append(test_res)
     
     #print('Выборка прогнозирования')
-    if forecastDays:
+    if forecast:
         display(forecast_res)
         results.append(forecast_res)
         
