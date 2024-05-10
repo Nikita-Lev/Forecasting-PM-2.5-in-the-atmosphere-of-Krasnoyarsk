@@ -49,10 +49,11 @@ def MetricsDF(model, x_train, y_train, x_valid = [], y_valid = [], tableName = '
         x_valid.sort_index(inplace = True)
         y_valid.sort_index(inplace = True)
         CompareGraph(y_valid.index, y_valid, model.predict(x_valid), 'Истинные значения', 'Прогнозируемые значения', 'Сравнение прогноза с истинными данными')
-        if testUsed:
-            x_test.sort_index(inplace = True)
-            y_test.sort_index(inplace = True)
-            CompareGraph(y_test.index, y_test, model.predict(x_test), 'Истинные значения', 'Прогнозируемые значения', 'Сравнение прогноза с истинными данными. Test')
+    
+    if plot and testUsed:
+        x_test.sort_index(inplace = True)
+        y_test.sort_index(inplace = True)
+        CompareGraph(y_test.index, y_test, model.predict(x_test), 'Истинные значения', 'Прогнозируемые значения', 'Сравнение прогноза с истинными данными. Test')
     
     # Сохранение в файл
     if savePath:
@@ -106,13 +107,13 @@ def splitDataBySeason(df, season):
     
     # Зима
     if season == 'winters':
-        win19 = df[:'2019-03-01 00:00:00']
-        win19_20 = df['2019-11-27 00:00:00':'2020-02-27 00:00:00']
-        win20_21 = df['2020-11-27 00:00:00':'2021-02-25 00:00:00']
-        win21_22 = df['2021-12-15 00:00:00':'2022-02-22 00:00:00']
+        win19 = df[: '2019-03-01 00:00:00']
+        win19_20 = df['2019-11-27 00:00:00' : '2020-02-27 00:00:00']
+        win20_21 = df['2020-11-27 00:00:00' : '2021-02-25 00:00:00']
+        win21_22 = df['2021-12-15 00:00:00' : '2022-02-22 00:00:00']
         win22_23 = df['2022-12-13 00:00:00' : '2023-02-22 00:00:00']
-
-        return pd.concat([win19, win19_20, win20_21, win21_22, win22_23])
+        win23_24 = df['2023-11-28 00:00:00' : '2024-02-20 00:00:00']
+        return pd.concat([win19, win19_20, win20_21, win21_22, win22_23, win23_24])
     
     # Весна
     if season == 'springs':
@@ -120,9 +121,10 @@ def splitDataBySeason(df, season):
         spr20 = pd.concat([df['2020-03-01' : '2020-05-01'], df['2020-11-01' : '2020-11-10']])
         spr21 = pd.concat([df['2021-03-10' : '2021-05-01'], df['2021-11-01' : '2021-11-25']])
         spr22 = pd.concat([df['2022-03-01' : '2022-05-01'], df['2022-11-01' : '2022-11-25']])
-        spr23 = df['2023-03-01' : ]
+        spr23 = pd.concat([df['2023-03-01' : '2023-05-01'], df['2023-11-01' : '2023-11-27']])
+        spr24 = df['2024-03-01' :]
 
-        return pd.concat([spr19, spr20, spr21, spr22, spr23])
+        return pd.concat([spr19, spr20, spr21, spr22, spr23, spr24])
 
     # Лето
     if season == 'summers':
@@ -130,8 +132,9 @@ def splitDataBySeason(df, season):
         sum20 = df['2020-05-01' : '2020-08-01']
         sum21 = df['2021-05-01' : '2021-08-01']
         sum22 = df['2022-05-01' : '2022-08-01']
+        sum23 = df['2023-05-03' : '2023-08-05']
 
-        return pd.concat([sum19, sum20, sum21, sum22])
+        return pd.concat([sum19, sum20, sum21, sum22, sum23])
     
     # Осень
     if season == 'autumns':
@@ -139,12 +142,13 @@ def splitDataBySeason(df, season):
         aut20 = df['2020-08-17' : '2020-10-30']
         aut21 = df['2021-08-15' : '2021-11-01']
         aut22 = df['2022-08-01' : '2022-10-14']
+        aut23 = df['2023-08-10' : '2023-10-25']
 
-        return pd.concat([aut19, aut20, aut21, aut22])
+        return pd.concat([aut19, aut20, aut21, aut22, aut23])
     
 
-def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '', valid_size = 0.3, season_test = '', params = None, gridSearch = True, paramDependencies = [], plotRes = False, featImp = False,
-                       path = '../data/', savePath = ''):
+def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '', valid_size = 0.3, season_test = '', season_forecast = '', params = None, gridSearch = True, paramDependencies = [], plotRes = False, featImp = False,
+                       path = '../data/', savePath = '', sheet_name = 'Results'):
     '''Обучение, подбор параметров, валидация, прогнозирование для выбранного класса моделей
     '''
     
@@ -152,10 +156,6 @@ def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '',
     df = pd.read_csv(f"{path}pm25_{sensor}{fill}.csv", sep = ';', index_col = ['Date'], parse_dates = ['Date'], usecols = ['Date', district])
     df.rename(columns = {district : 'pm'}, inplace = True)
 
-    # Исключение выборки прогнозирования
-    df.drop(index = [f'2023-02-{i}' for i in range(18, 23)] + [f'2023-03-{i}' for i in range(23, 28)] +
-                    [f'2022-07-{i}' for i in range(28, 32)] + [f'2022-08-01'] +
-                     [f'2022-10-{i}' for i in range(10, 15)], inplace = True)
         
     
     features = ['Pressure', 'Temperature', 'Wet', 'Wind_dir', 'Wind_speed']
@@ -174,21 +174,41 @@ def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '',
         
     df = inversions.join(df)    
     
-    df.dropna(inplace = True)
+    '''
+    testUsed = True
     
+    #idx = [f'2023-02-{i}' for i in range(18, 23)][:-2]
+    #idx = [f'2023-03-{i}' for i in range(23, 28)][:-2]
+    #idx = [f'2022-07-{i}' for i in range(28, 32)][:-1]
+    #idx = [f'2022-10-{i}' for i in range(10, 15)][:-2]
+    
+    x_test = df.loc[idx].drop(['pm'], axis = 1)
+    y_test = df.loc[idx]['pm']
+    '''
+    
+    df.dropna(inplace = True)    
     
     testUsed = False
     
+    # Исключение тестовой выборки и выборки прогнозирования для каждого сезона
     test_index = pd.read_csv(f"../data/test_index.csv", sep = ';', dayfirst = True, parse_dates = [0, 1, 2, 3])
-    for col in test_index.columns:
-        idx = list(set(test_index[col].dropna()) & set(df.index))
-        
+    forecast_index = pd.read_csv(f"../data/forecast_index.csv", sep = ';', dayfirst = True, parse_dates = [0, 1, 2, 3])
+    for col in ['winters', 'springs', 'summers', 'autumns']:
+        idx_test = list(set(test_index[col].dropna()) & set(df.index))
+       
         if col == season_test:
             testUsed = True
-            x_test = df.loc[idx].drop(['pm'], axis = 1)
-            y_test = df.loc[idx]['pm']
-       
-        df.drop(idx, inplace = True)
+            x_test = df.loc[idx_test].drop(['pm'], axis = 1)
+            y_test = df.loc[idx_test]['pm']
+            
+        idx_forecast = list(set(forecast_index[col].dropna()) & set(df.index))
+        
+        if col == season_forecast:
+            x_forecast = df.loc[idx_forecast].drop(['pm'], axis = 1)
+            y_forecast = df.loc[idx_forecast]['pm']
+        
+        df.drop(list(set(idx_test) | set(idx_forecast)), inplace = True)
+    
     
     df = df[begin : end]
     
@@ -204,6 +224,9 @@ def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '',
     x = df.drop(['pm'], axis = 1)
     y = df['pm']
 
+    # Допольнительная колонка ошибок по кросс-валидации
+    metricsCV = []
+    
     # Поиск по сетке (оценка качества по кросс-валидации)
     if gridSearch:
         scoring = ['neg_mean_squared_error', 'neg_mean_absolute_error', 'neg_mean_absolute_percentage_error', 'r2' ]
@@ -212,14 +235,12 @@ def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '',
         # Валидация не используется
         x_train, x_valid, y_train, y_valid = x, [], y, []
         
+        
         # Обучение
         model.fit(x_train, y_train)
         
         param_grid = params
         params = model.best_params_
-        
-        # Допольнительная колонка ошибок по кросс-валидации
-        metricsCV = []
         
         
         # Качество по кросс валидации
@@ -242,9 +263,15 @@ def ModelProcessing(model, sensor, fill, district, begin, end, seasonModel = '',
     tableName += f" {params}"
     
     if testUsed:
-        MetricsDF(model, x_train, y_train, x_valid, y_valid, tableName, metricsCV, testUsed, x_test, y_test, plotRes, savePath)
+        MetricsDF(model, x_train, y_train, x_valid, y_valid, tableName, metricsCV, testUsed, x_test, y_test, plotRes, savePath, sheet_name)
     else:
-        MetricsDF(model, x_train, y_train, x_valid, y_valid, tableName, metricsCV, testUsed, plotRes, savePath)
+        MetricsDF(model, x_train, y_train, x_valid, y_valid, tableName, metricsCV, testUsed, plotRes, savePath, sheet_name)
+        
+        
+    if season_forecast:
+        print('ПРОГНОЗЫ:')
+        for i in range(0, y_forecast.shape[0], 3):
+            MetricsDF(model, x_train, y_train, x_valid, y_valid, tableName, metricsCV, testUsed, x_forecast.sort_index()[i:i+3], y_forecast.sort_index()[i:i+3], plotRes, savePath, sheet_name)
     
     # Определение важности признаков
     if featImp: FeatureImportance(model)
